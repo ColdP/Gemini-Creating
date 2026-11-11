@@ -1,0 +1,1836 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Liquid Glass — 液态玻璃实时光学交互</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #120d07;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", sans-serif;
+      color: #ffffff;
+    }
+
+    /* WebGL 实时光学渲染画布 */
+    #gl-canvas {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    /* 交互布局层 */
+    #ui-layer {
+      position: relative;
+      z-index: 10;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: center;
+      padding: clamp(16px, 3.5vh, 36px) 16px clamp(18px, 3.5vh, 32px);
+      pointer-events: none;
+    }
+
+    /* 上方：液态玻璃块热区（由 WebGL 实时追踪尺寸、位置与形变进行光学渲染） */
+    .glass-stage {
+      flex: 1;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      min-height: 175px;
+    }
+
+    #liquid-block {
+      width: clamp(300px, 86vw, 430px);
+      border-radius: 38px;
+      padding: 16px 22px 18px;
+      position: relative;
+      cursor: grab;
+      pointer-events: auto;
+      touch-action: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 12px;
+      transition: box-shadow 0.3s ease;
+    }
+
+    #liquid-block:active {
+      cursor: grabbing;
+    }
+
+    /* 玻璃块顶部拖拽把手与标题栏 */
+    .block-drag-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 2px;
+      pointer-events: none;
+    }
+
+    .block-pill-handle {
+      width: 34px;
+      height: 4px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.38);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    }
+
+    /* 下方：具有液态玻璃效果背景的控制卡片 */
+    #liquid-card {
+      width: 100%;
+      max-width: 600px;
+      border-radius: 34px;
+      padding: clamp(16px, 2.4vh, 24px) clamp(18px, 3.2vw, 28px);
+      position: relative;
+      pointer-events: auto;
+      text-shadow: 0 1px 6px rgba(0, 0, 0, 0.42);
+    }
+
+    /* ==================== iOS 26 液态玻璃 Slider 控件 (还原图1 & 图2) ==================== */
+    .slider-item {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .slider-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12.5px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.92);
+    }
+
+    .slider-val {
+      font-variant-numeric: tabular-nums;
+      font-size: 11.5px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.88);
+      background: rgba(0, 0, 0, 0.22);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      padding: 1px 8px;
+      border-radius: 999px;
+    }
+
+    /* 液态玻璃滑块容器 */
+    .lg-slider-wrap {
+      position: relative;
+      width: 100%;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      touch-action: none;
+      --progress: 50%;
+      --progress-num: 0.5;
+    }
+
+    .lg-slider-wrap.lg-slider-large {
+      height: 36px;
+    }
+
+    /* 底层原生 input 覆盖在上方负责无障碍与精准拖拽事件 */
+    .lg-slider-input {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      margin: 0;
+      cursor: pointer;
+      z-index: 5;
+    }
+
+    /* 滑块轨道：右侧未填充浅灰底轨 + 左侧 iOS 蓝填充轨 */
+    .lg-slider-track {
+      position: relative;
+      width: 100%;
+      height: 6px;
+      border-radius: 999px;
+      background: rgba(200, 208, 222, 0.36);
+      box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18);
+      overflow: visible;
+      transition: opacity 0.08s ease;
+    }
+
+    .lg-slider-large .lg-slider-track {
+      height: 7px;
+    }
+
+    .lg-slider-fill {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: var(--progress);
+      border-radius: 999px;
+      background: #007AFF;
+    }
+
+    /*
+     * 常态 (Normal State) 滑块手柄 — 还原图3：
+     * 纯净实体白色小胶囊，无多余内部折射条；
+     * 当手指按住进入选中态 (.is-webgl-active) 时，交由 WebGL 实时渲染液态玻璃大胶囊并跟随 8 项光学参数变化
+     */
+    .lg-slider-thumb {
+      position: absolute;
+      top: 50%;
+      left: var(--progress);
+      width: 28px;
+      height: 18px;
+      border-radius: 999px;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      z-index: 3;
+      background: #ffffff;
+      box-shadow:
+        0 2px 6px rgba(0, 0, 0, 0.24),
+        0 0 1px rgba(0, 0, 0, 0.12);
+      transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.08s ease;
+    }
+
+    .lg-slider-large .lg-slider-thumb {
+      width: 34px;
+      height: 22px;
+    }
+
+    /* 选中态由 WebGL 实时液态玻璃管线接管渲染，隐藏 DOM 静态轨道与白色滑块以避免遮挡折射 */
+    .lg-slider-wrap.is-webgl-active .lg-slider-track,
+    .lg-slider-wrap.is-webgl-active .lg-slider-thumb {
+      opacity: 0;
+    }
+
+    /* ==================== iOS 26 Toggle 开关控件 (常态还原图2 True Tone，按住选中态还原图1 液态玻璃胶囊) ==================== */
+    .lg-toggle {
+      position: relative;
+      width: 60px;
+      height: 30px;
+      border-radius: 999px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      padding: 2px;
+      background: transparent;
+      border: none;
+      outline: none;
+      touch-action: none;
+    }
+
+    /* 常态 (Normal State) 翠绿/浅灰饱满胶囊底轨 — 还原图2 True Tone */
+    .lg-toggle-track {
+      position: absolute;
+      inset: 0;
+      border-radius: 999px;
+      background: rgba(142, 148, 160, 0.42);
+      box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.16);
+      transition: background 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.08s ease;
+    }
+
+    .lg-toggle[aria-checked="true"] .lg-toggle-track {
+      background: #34C759;
+    }
+
+    /* 常态 (Normal State) 纯白实体胶囊滑块 — 还原图2 True Tone */
+    .lg-toggle-thumb {
+      position: relative;
+      z-index: 2;
+      width: 36px;
+      height: 26px;
+      border-radius: 999px;
+      transform: translateX(0px);
+      background: #ffffff;
+      box-shadow:
+        0 2px 5px rgba(0, 0, 0, 0.22),
+        0 0 1px rgba(0, 0, 0, 0.1);
+      transition:
+        transform 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+        opacity 0.08s ease;
+    }
+
+    .lg-toggle[aria-checked="true"] .lg-toggle-thumb {
+      transform: translateX(20px);
+    }
+
+    /* 手指按住开关进入选中态 (.is-webgl-active) 时，由 WebGL 实时渲染液态玻璃胶囊与内部折射绿芯 */
+    .lg-toggle.is-webgl-active .lg-toggle-track,
+    .lg-toggle.is-webgl-active .lg-toggle-thumb {
+      opacity: 0;
+    }
+
+    /* 胶囊形状上传按钮 */
+    .capsule-btn {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 24px;
+      border-radius: 9999px;
+      font-size: 13.5px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: #ffffff;
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.24) 0%, rgba(255, 255, 255, 0.09) 100%);
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25), inset 0 1px 1px rgba(255, 255, 255, 0.45);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      cursor: pointer;
+      transition: all 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    }
+
+    .capsule-btn:hover {
+      transform: translateY(-1.5px) scale(1.02);
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.32) 0%, rgba(255, 255, 255, 0.14) 100%);
+      border-color: rgba(255, 255, 255, 0.55);
+      box-shadow: 0 10px 26px rgba(0, 0, 0, 0.34), inset 0 1px 2px rgba(255, 255, 255, 0.65);
+    }
+
+    .capsule-btn:active {
+      transform: translateY(0px) scale(0.98);
+    }
+
+    /* 状态轻提示 */
+    #toast-msg {
+      position: fixed;
+      top: 18px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-20px);
+      padding: 7px 16px;
+      border-radius: 9999px;
+      background: rgba(15, 15, 18, 0.68);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      font-size: 12.5px;
+      color: rgba(255, 255, 255, 0.92);
+      z-index: 50;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    #toast-msg.visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- WebGL 实时液态玻璃光学着色器画布 -->
+  <canvas id="gl-canvas"></canvas>
+
+  <!-- 顶部轻提示 -->
+  <div id="toast-msg">背景图片已更新</div>
+
+  <!-- 主界面结构 -->
+  <main id="ui-layer">
+    <!-- 上方：可自由拖拽的液态玻璃块，内部包含还原图1 & 图2的 iOS 26 液态玻璃 Slider 与 Toggle 控件 -->
+    <div class="glass-stage">
+      <div id="liquid-block" title="按住空白处拖动液态玻璃块，双击归位">
+        <!-- 顶部拖拽提示栏 -->
+        <div class="block-drag-header">
+          <span class="text-[11px] font-semibold tracking-wider uppercase text-white/75">Brightness &amp; Glass Controls</span>
+          <div class="block-pill-handle"></div>
+          <span class="text-[11px] font-medium text-white/65">拖动玻璃 · 双击归位</span>
+        </div>
+
+        <!-- 控件 1：iOS 26 液态玻璃亮度滑块 (还原图1 Brightness & 图2 下方蓝色液态玻璃 Slider) -->
+        <div class="flex items-center gap-3.5 py-1" data-no-drag="true">
+          <!-- 左侧小太阳图标 -->
+          <svg class="w-4 h-4 text-white/75 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path stroke-linecap="round" d="M12 3v2m0 14v2M5.64 5.64l1.41 1.41m9.9 9.9l1.41 1.41M3 12h2m14 0h2M5.64 18.36l1.41-1.41m9.9-9.9l1.41-1.41"></path>
+          </svg>
+
+          <!-- 液态玻璃胶囊 Slider -->
+          <div class="lg-slider-wrap lg-slider-large flex-1">
+            <div class="lg-slider-track">
+              <div class="lg-slider-fill"></div>
+            </div>
+            <div class="lg-slider-thumb"></div>
+            <input id="demo-brightness-slider" type="range" class="lg-slider-input" min="20" max="130" step="1" value="82" data-default="82" aria-label="Brightness" />
+          </div>
+
+          <!-- 右侧大太阳图标 -->
+          <svg class="w-5 h-5 text-white/95 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="4.5"></circle>
+            <path stroke-linecap="round" d="M12 2v2.5m0 15V22M4.93 4.93l1.77 1.77m10.6 10.6l1.77 1.77M2 12h2.5m15 0H22M4.93 19.07l1.77-1.77m10.6-10.6l1.77-1.77"></path>
+          </svg>
+        </div>
+
+        <div class="h-px w-full bg-white/15"></div>
+
+        <!-- 控件 2：iOS 26 液态玻璃 Toggle 开关 (常态还原图2 True Tone，按住选中态还原图1 液态玻璃开关) -->
+        <div class="flex items-center justify-between pt-0.5" data-no-drag="true">
+          <div class="flex flex-col">
+            <span class="text-[14px] font-semibold text-white/95 leading-tight">True Tone</span>
+            <span class="text-[11px] text-white/65">按住开关或滑块体验 iOS 26 选中态液态玻璃胶囊</span>
+          </div>
+          <button id="demo-truetone-toggle" type="button" role="switch" aria-checked="true" class="lg-toggle" title="按住查看液态玻璃选中态，松开切换原彩显示">
+            <span class="lg-toggle-track"></span>
+            <span class="lg-toggle-thumb"></span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 下方：带有实时液态玻璃背景效果的参数卡片 -->
+    <section id="liquid-card" aria-label="液态玻璃参数控制面板">
+      <div class="flex items-center justify-between mb-3 pb-2 border-b border-white/15">
+        <div class="flex items-center gap-2">
+          <span class="inline-block w-2.5 h-2.5 rounded-full bg-amber-300/90 shadow-[0_0_8px_rgba(252,211,77,0.8)]"></span>
+          <h1 class="text-sm sm:text-base font-semibold tracking-wide text-white/95">
+            液态玻璃光学参数
+          </h1>
+        </div>
+        <span class="text-[11px] text-white/65 font-medium">双击滑块重置单项 · 刷新恢复默认</span>
+      </div>
+
+      <!-- 8 个核心光学参数滑块（全部采用 iOS 26 液态玻璃胶囊 Slider） -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5">
+        <!-- 1. 模糊度 -->
+        <div class="slider-item">
+          <div class="slider-header">
+            <label for="slider-blur">模糊度</label>
+            <span id="val-blur" class="slider-val">18 px</span>
+          </div>
+          <div class="lg-slider-wrap">
+            <div class="lg-slider-track"><div class="lg-slider-fill"></div></div>
+            <div class="lg-slider-thumb"></div>
+            <input id="slider-blur" type="range" class="lg-slider-input" min="0" max="100" step="1" value="18" data-default="18" />
+          </div>
+        </div>
+
+        <!-- 2. 背景不透明度 -->
+        <div class="slider-item">
+          <div class="slider-header">
+            <label for="slider-opacity">背景不透明度</label>
+            <span id="val-opacity" class="slider-val">12%</span>
+          </div>
+          <div class="lg-slider-wrap">
+            <div class="lg-slider-track"><div class="lg-slider-fill"></div></div>
+            <div class="lg-slider-thumb"></div>
+            <input id="slider-opacity" type="range" class="lg-slider-input" min="0" max="85" step="1" value="12" data-default="12" />
+          </div>
+        </div>
+
+        <!-- 3. 折射强度 -->
+        <div class="slider-item">
+          <div class="slider-header">
+            <label for="slider-refraction">折射强度</label>
+            <span id="val-refraction" class="slider-val">62%</span>
+          </div>
+          <div class="lg-slider-wrap">
+            <div class="lg-slider-track"><div class="lg-slider-fill"></div></div>
+            <div class="lg-slider-thumb"></div>
+            <input id="slider-refraction" type="range" class="lg-slider-input" min="0" max="100" step="1" value="62" data-default="62" />
+          </div>
+        </div>
+
+        <!-- 4. 折射厚度 -->
+        <div class="slider-item">
+          <div class="slider-header">
+            <label for="slider-thickness">折射厚度</label>
+            <span id="val-thickness" class="slider-val">48 px</span>
+          </div>
+          <div class="lg-slider-wrap">
+            <div class="lg-slider-track"><div class="lg-slider-fill"></div></div>
+            <div class="lg-slider-thumb"></div>
+            <input id="slider-thickness" type="range" class="lg-slider-input" min="4" max="120" step="1" value="48" data-default="48" />
+          </div>
+        </div>
+
+        <!-- 5. 高光强度 -->
+        <div class="slider-item">
+          <div class="slider-header">
+            <label for="slider-specular">高光强度</label>
+            <span id="val-specular" class="slider-val">72%</span>
+          </div>
+          <div class="lg-slider-wrap">
+            <div class="lg-slider-track"><div class="lg-slider-fill"></div></div>
+            <div class="lg-slider-thumb"></div>
+            <input id="slider-specular" type="range" class="lg-slider-input" min="0" max="100" step="1" value="72" data-default="72" />
+          </div>
+        </div>
+
+        <!-- 6. 高光宽度 (新增) -->
+        <div class="slider-item">
+          <div class="slider-header">
+            <label for="slider-specWidth">高光宽度</label>
+            <span id="val-specWidth" class="slider-val">2.5 px</span>
+          </div>
+          <div class="lg-slider-wrap">
+            <div class="lg-slider-track"><div class="lg-slider-fill"></div></div>
+            <div class="lg-slider-thumb"></div>
+            <input id="slider-specWidth" type="range" class="lg-slider-input" min="5" max="150" step="1" value="25" data-default="25" />
+          </div>
+        </div>
+
+        <!-- 7. 高光硬度 (新增) -->
+        <div class="slider-item">
+          <div class="slider-header">
+            <label for="slider-specHardness">高光硬度</label>
+            <span id="val-specHardness" class="slider-val">78%</span>
+          </div>
+          <div class="lg-slider-wrap">
+            <div class="lg-slider-track"><div class="lg-slider-fill"></div></div>
+            <div class="lg-slider-thumb"></div>
+            <input id="slider-specHardness" type="range" class="lg-slider-input" min="0" max="100" step="1" value="78" data-default="78" />
+          </div>
+        </div>
+
+        <!-- 8. 色散 -->
+        <div class="slider-item">
+          <div class="slider-header">
+            <label for="slider-dispersion">色散</label>
+            <span id="val-dispersion" class="slider-val">45%</span>
+          </div>
+          <div class="lg-slider-wrap">
+            <div class="lg-slider-track"><div class="lg-slider-fill"></div></div>
+            <div class="lg-slider-thumb"></div>
+            <input id="slider-dispersion" type="range" class="lg-slider-input" min="0" max="100" step="1" value="45" data-default="45" />
+          </div>
+        </div>
+      </div>
+
+      <!-- 底部胶囊形状上传图片按钮 -->
+      <div class="mt-4 pt-2.5 border-t border-white/10 flex items-center justify-center">
+        <input id="bg-upload-input" type="file" accept="image/*" class="hidden" />
+        <button id="bg-upload-btn" type="button" class="capsule-btn">
+          <svg class="w-4 h-4 text-white/95" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+          <span>上传背景图片</span>
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    /**
+     * Liquid Glass 实时多通道光学渲染引擎
+     * - 采用 5 级可分离高斯模糊金字塔 (Separable Gaussian Blur Pyramid) + 实时 3D 弯月面法线折射与 9 波段连续光谱色散
+     * - 高光完全独立于折射计算（不参与折射法线也不产生二次内圈反光），由高光强度、高光宽度、高光硬度精准控制单层纯净边框高光
+     */
+    const DEFAULT_WALLPAPER_URL = 'https://raw.githubusercontent.com/ColdP/images/refs/heads/main/iOS-27-wallpaper-Gold.jpg';
+
+    const canvas = document.getElementById('gl-canvas');
+    const gl = canvas.getContext('webgl', {
+      alpha: false,
+      antialias: true,
+      depth: false,
+      stencil: false,
+      preserveDrawingBuffer: false
+    });
+
+    const liquidBlockEl = document.getElementById('liquid-block');
+    const liquidCardEl = document.getElementById('liquid-card');
+    const uploadInput = document.getElementById('bg-upload-input');
+    const uploadBtn = document.getElementById('bg-upload-btn');
+    const toastEl = document.getElementById('toast-msg');
+
+    // 8 项光学参数 + 顶部玻璃块内的演示控件状态
+    const state = {
+      blur: 18,          // 0 - 100
+      opacity: 12,       // 0 - 85
+      refraction: 62,    // 0 - 100
+      thickness: 48,     // 4 - 120
+      specular: 72,      // 0 - 100 (高光强度)
+      specWidth: 2.5,    // 0.5 - 15.0 px (高光宽度)
+      specHardness: 78,  // 0 - 100 (高光硬度)
+      dispersion: 45,    // 0 - 100 (色散)
+      brightness: 82,    // 顶部玻璃块内的亮度 Slider (20 - 130)
+      trueTone: 1.0      // 顶部玻璃块内的 True Tone Toggle (1.0 开启, 0.0 关闭)
+    };
+
+    // 液态玻璃块拖拽与弹簧动力学状态
+    const blockMotion = {
+      offsetX: 0,
+      offsetY: 0,
+      targetX: 0,
+      targetY: 0,
+      velX: 0,
+      velY: 0,
+      scaleX: 1,
+      scaleY: 1,
+      isDragging: false,
+      startPointerX: 0,
+      startPointerY: 0,
+      startOffsetX: 0,
+      startOffsetY: 0
+    };
+
+    // 指针位置（用于动态交互高光）
+    const pointer = {
+      x: window.innerWidth * 0.5,
+      y: window.innerHeight * 0.35,
+      targetX: window.innerWidth * 0.5,
+      targetY: window.innerHeight * 0.35
+    };
+
+    // 显示轻提示
+    let toastTimer = null;
+    function showToast(msg) {
+      toastEl.textContent = msg;
+      toastEl.classList.add('visible');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        toastEl.classList.remove('visible');
+      }, 2200);
+    }
+
+    // ==================== WebGL 着色器定义 ====================
+
+    const VERTEX_SHADER_SRC = `
+      attribute vec2 a_position;
+      varying vec2 v_uv;
+      void main() {
+        v_uv = a_position * 0.5 + 0.5;
+        gl_Position = vec4(a_position, 0.0, 1.0);
+      }
+    `;
+
+    // Pass 0: 将原始图片按 object-fit: cover 渲染到屏幕比例的 FBO0
+    const COVER_FRAGMENT_SRC = `
+      precision highp float;
+      varying vec2 v_uv;
+      uniform sampler2D u_image;
+      uniform vec2 u_resolution;
+      uniform vec2 u_imageResolution;
+
+      void main() {
+        float screenAspect = u_resolution.x / max(u_resolution.y, 1.0);
+        float imageAspect = u_imageResolution.x / max(u_imageResolution.y, 1.0);
+
+        vec2 scale = vec2(1.0);
+        if (screenAspect > imageAspect) {
+          scale.y = imageAspect / screenAspect;
+        } else {
+          scale.x = screenAspect / imageAspect;
+        }
+
+        // 翻转 Y 轴以匹配 HTML Image 坐标系，后续所有 FBO 均处于统一 WebGL UV 空间
+        vec2 uv = vec2(v_uv.x, 1.0 - v_uv.y);
+        vec2 coveredUV = (uv - 0.5) * scale + 0.5;
+        gl_FragColor = texture2D(u_image, clamp(coveredUV, 0.0, 1.0));
+      }
+    `;
+
+    // Pass 1..8: 13-Tap 可分离高斯模糊着色器（构建丝滑无噪点的多级高斯模糊金字塔）
+    const BLUR_FRAGMENT_SRC = `
+      precision highp float;
+      varying vec2 v_uv;
+      uniform sampler2D u_tex;
+      uniform vec2 u_dir; // (1/w, 0) 或 (0, 1/h) * 步长
+
+      void main() {
+        vec4 color = vec4(0.0);
+        // 利用硬件双线性插值优化的 13-Tap 高斯核权重
+        color += texture2D(u_tex, clamp(v_uv, 0.001, 0.999)) * 0.19648255;
+
+        vec2 off1 = u_dir * 1.4117647;
+        vec2 off2 = u_dir * 3.2941176;
+        vec2 off3 = u_dir * 5.1764706;
+
+        color += texture2D(u_tex, clamp(v_uv + off1, 0.001, 0.999)) * 0.29690696;
+        color += texture2D(u_tex, clamp(v_uv - off1, 0.001, 0.999)) * 0.29690696;
+
+        color += texture2D(u_tex, clamp(v_uv + off2, 0.001, 0.999)) * 0.09447039;
+        color += texture2D(u_tex, clamp(v_uv - off2, 0.001, 0.999)) * 0.09447039;
+
+        color += texture2D(u_tex, clamp(v_uv + off3, 0.001, 0.999)) * 0.01038136;
+        color += texture2D(u_tex, clamp(v_uv - off3, 0.001, 0.999)) * 0.01038136;
+
+        gl_FragColor = color;
+      }
+    `;
+
+    // 主通道：实时液态玻璃物理折射、弯月面厚度、光谱色散、多层模糊插值与菲涅尔高光
+    const MAIN_FRAGMENT_SRC = `
+      precision highp float;
+      varying vec2 v_uv;
+
+      uniform sampler2D u_level0;
+      uniform sampler2D u_level1;
+      uniform sampler2D u_level2;
+      uniform sampler2D u_level3;
+      uniform sampler2D u_level4;
+
+      uniform vec2 u_resolution;
+      uniform float u_dpr;
+      uniform vec2 u_pointer;
+
+      // 矩形参数: xy = 中心坐标(CSS px), zw = 半宽高(CSS px)
+      uniform vec4 u_blockRect;
+      uniform float u_blockRadius;
+      uniform vec2 u_blockScale;
+
+      uniform vec4 u_cardRect;
+      uniform float u_cardRadius;
+
+      // 8 项液态玻璃实时光学参数
+      uniform float u_blur;          // 0.0 ~ 1.0
+      uniform float u_opacity;       // 0.0 ~ 0.85
+      uniform float u_refraction;    // 0.0 ~ 1.0
+      uniform float u_thickness;     // 4.0 ~ 120.0 (CSS px)
+      uniform float u_specular;      // 0.0 ~ 1.0 (高光强度)
+      uniform float u_specWidth;     // 0.5 ~ 15.0 (高光宽度 CSS px)
+      uniform float u_specHardness;  // 0.0 ~ 1.0 (高光硬度)
+      uniform float u_dispersion;    // 0.0 ~ 1.0 (色散)
+
+      // 顶部玻璃块内 Brightness 与 True Tone 控件驱动的场景光效微调
+      uniform float u_exposure;
+      uniform float u_trueTone;
+
+      // 选中态 (手指按住/拖拽时) 的控件轨道与液态玻璃胶囊参数
+      // u_activeType: 0.0 = 无激活控件, 1.0 = Slider 滑块, 2.0 = Toggle 开关
+      uniform float u_activeType;
+      uniform float u_activeMorph;       // 0.0 (常态白胶囊) -> 1.0 (选中态膨胀液态玻璃胶囊)
+      uniform vec4 u_activeTrackRect;    // xy = 轨道中心, zw = 轨道半宽高 (CSS px)
+      uniform vec4 u_activeThumbRect;    // xy = 胶囊中心, zw = 胶囊半宽高 (CSS px)
+      uniform float u_activeValue;       // 0.0 ~ 1.0 (滑块进度 或 开关左右滑动比例)
+
+      // 圆角矩形有向距离场 (Signed Distance Field)
+      float sdRoundBox(vec2 p, vec2 b, float r) {
+        vec2 q = abs(p) - b + r;
+        return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+      }
+
+      // 对采样后的背景应用 Brightness 与 True Tone 温润色调
+      vec3 applyDisplayTone(vec3 col) {
+        vec3 warmTint = mix(vec3(0.96, 0.98, 1.04), vec3(1.03, 1.0, 0.95), u_trueTone);
+        return clamp(col * u_exposure * warmTint, 0.0, 1.0);
+      }
+
+      // 连续采样 5 级高斯模糊金字塔（仅包含纯净背景图，绝不包含任何玻璃高光）
+      vec3 sampleBlurPyramid(vec2 uv, float blurAmount) {
+        vec2 cUV = clamp(uv, 0.001, 0.999);
+        float lvl = clamp(blurAmount, 0.0, 1.0) * 4.0;
+
+        vec3 c0 = texture2D(u_level0, cUV).rgb;
+        if (lvl <= 0.001) return applyDisplayTone(c0);
+
+        vec3 c1 = texture2D(u_level1, cUV).rgb;
+        if (lvl <= 1.0) return applyDisplayTone(mix(c0, c1, lvl));
+
+        vec3 c2 = texture2D(u_level2, cUV).rgb;
+        if (lvl <= 2.0) return applyDisplayTone(mix(c1, c2, lvl - 1.0));
+
+        vec3 c3 = texture2D(u_level3, cUV).rgb;
+        if (lvl <= 3.0) return applyDisplayTone(mix(c2, c3, lvl - 2.0));
+
+        vec3 c4 = texture2D(u_level4, cUV).rgb;
+        return applyDisplayTone(mix(c3, c4, lvl - 3.0));
+      }
+
+      // 核心液态玻璃光学求解器（高光与折射严格分离，杜绝双重边框高光）
+      vec3 renderLiquidGlassLayer(
+        vec3 bgCol,
+        vec2 cssPos,
+        vec2 center,
+        vec2 halfSize,
+        float cornerRadius,
+        vec2 deformScale,
+        float isCardLayer
+      ) {
+        vec2 localPos = (cssPos - center) / deformScale;
+        float r = min(cornerRadius, min(halfSize.x, halfSize.y) - 1.0);
+        float d = sdRoundBox(localPos, halfSize, r);
+
+        // 外部柔和环境投影（不含任何外部高光亮圈）
+        float shadowSpread = mix(28.0, 38.0, isCardLayer);
+        if (d > shadowSpread) {
+          return bgCol;
+        }
+
+        if (d > 0.75) {
+          vec2 shadowPos = localPos - vec2(0.0, mix(10.0, 6.0, isCardLayer));
+          float sdShadow = sdRoundBox(shadowPos, halfSize, r);
+          float shadowMask = exp(-max(sdShadow, 0.0) * 0.11) * mix(0.32, 0.40, isCardLayer);
+          return bgCol * (1.0 - shadowMask);
+        }
+
+        // 计算精确的 SDF 梯度方向（指向圆角边界法线外侧）
+        float eps = 0.75;
+        float dx = sdRoundBox(localPos + vec2(eps, 0.0), halfSize, r) - sdRoundBox(localPos - vec2(eps, 0.0), halfSize, r);
+        float dy = sdRoundBox(localPos + vec2(0.0, eps), halfSize, r) - sdRoundBox(localPos - vec2(0.0, eps), halfSize, r);
+        vec2 edgeGrad = normalize(vec2(dx, dy) + vec2(1e-6));
+
+        // 玻璃内部距离外边界的精确像素深度 x >= 0 (x = 0 为玻璃最外沿)
+        float x = max(-d, 0.0);
+
+        // ==================== 1. 纯净背景折射与色散 (仅采样背景模糊金字塔，高光不参与折射) ====================
+        float maxSafeThickness = min(halfSize.x, halfSize.y) * 0.94;
+        float T = clamp(u_thickness, 4.0, maxSafeThickness);
+
+        // 归一化弯月面边缘坐标 u: 0 (玻璃中心平坦区) -> 1 (玻璃最外侧弧形边缘)
+        float u = clamp(1.0 - x / T, 0.0, 1.0);
+
+        // 液态弯月面 3D 曲率斜率模型
+        float smoothU = u * u * (3.0 - 2.0 * u);
+        float domeSlope = (smoothU * 0.65 + pow(u, 2.6) * 0.95) / sqrt(max(1.0 - 0.84 * u * u, 0.045));
+
+        // 整体轻微凸透镜张力
+        vec2 macroLens = (localPos / max(halfSize, vec2(1.0))) * mix(0.09, 0.035, isCardLayer);
+
+        // 合成仅用于背景折射的 3D 法线
+        vec2 normalXY = edgeGrad * domeSlope + macroLens;
+        vec3 N = normalize(vec3(normalXY, 1.0));
+
+        // 斯涅尔定律 (Snell's Law) 计算折射偏移
+        float ior = mix(1.0, 1.54, u_refraction);
+        vec3 incident = vec3(0.0, 0.0, -1.0);
+        vec3 refracted = refract(incident, N, 1.0 / ior);
+
+        float effectiveDepth = mix(18.0, 135.0, pow(u_refraction, 0.85)) * (0.35 + 0.65 * (T / 60.0));
+        vec2 refractPixOffset = vec2(refracted.x, -refracted.y) * effectiveDepth;
+        vec2 baseUVOffset = refractPixOffset * u_dpr / u_resolution;
+
+        // 边缘曲率微散射
+        float localBlur = clamp(u_blur + pow(u, 3.0) * u_refraction * 0.12 * step(0.01, u_blur), 0.0, 1.0);
+
+        // 9 波段连续光谱色散积分
+        float dispStrength = u_dispersion * (0.28 + 1.35 * pow(u, 1.25) + 0.35 * u_refraction);
+        vec2 tangentOffset = vec2(-baseUVOffset.y, baseUVOffset.x) * 0.22;
+
+        vec3 refractedCol = vec3(0.0);
+        if (u_dispersion < 0.005) {
+          refractedCol = sampleBlurPyramid(v_uv + baseUVOffset, localBlur);
+        } else {
+          vec3 accum = vec3(0.0);
+          vec3 weightSum = vec3(0.0);
+          for (int i = 0; i < 9; i++) {
+            float fi = float(i) / 8.0;
+            float s = (fi - 0.5) * 2.0;
+
+            vec3 w = vec3(
+              exp(-4.2 * (fi - 0.15) * (fi - 0.15)),
+              exp(-4.8 * (fi - 0.50) * (fi - 0.50)),
+              exp(-4.2 * (fi - 0.85) * (fi - 0.85))
+            );
+
+            vec2 wavelengthOffset = baseUVOffset * (1.0 + s * dispStrength * 0.52)
+                                  + tangentOffset * (s * dispStrength * 0.35);
+
+            accum += sampleBlurPyramid(v_uv + wavelengthOffset, localBlur) * w;
+            weightSum += w;
+          }
+          refractedCol = accum / max(weightSum, vec3(1e-5));
+        }
+
+        // 背景不透明度混合（均匀纯净玻璃基底，不随折射法线产生二道亮圈）
+        vec3 glassTint = mix(vec3(0.97, 0.98, 1.0), vec3(0.16, 0.15, 0.18), isCardLayer * 0.32);
+        vec3 glassCol = mix(refractedCol, glassTint, clamp(u_opacity, 0.0, 0.90));
+
+        // ==================== 2. 单层非折射表面边框高光 (由 高光强度 / 高光宽度 / 高光硬度 独立控制) ====================
+        // 直接从外边界 x = 0 开始向内单调衰减，彻底消除双重高光亮边
+        float widthPx = max(u_specWidth, 0.4);
+        float normDist = clamp(x / widthPx, 0.0, 1.0); // 0.0 在最外边缘，1.0 在高光宽度内侧终点
+
+        // 高光硬度控制：低硬度时呈柔和指数渐变，高硬度时保持饱满亮带并在宽度终点锐利截止
+        float innerStart = mix(0.0, 0.82, u_specHardness);
+        float falloffCurve = 1.0 - smoothstep(innerStart, 1.0, normDist);
+        float profileExponent = mix(2.4, 0.55, u_specHardness);
+        float radialRimProfile = pow(max(falloffCurve, 0.0), profileExponent);
+
+        // 沿圆角周长的方向性光照分布（左上主光源 + 右下对角反光 + 指针微交互）
+        float topLeftRim = pow(max(dot(edgeGrad, normalize(vec2(-0.68, -0.73))), 0.0), 1.35);
+        float bottomRightRim = pow(max(dot(edgeGrad, normalize(vec2(0.68, 0.73))), 0.0), 1.65) * 0.68;
+        vec2 toPointer = normalize((u_pointer - cssPos) + vec2(1e-4));
+        float pointerRim = max(dot(edgeGrad, toPointer), 0.0) * 0.18;
+
+        float directionalWeight = 0.24 + topLeftRim * 0.88 + bottomRightRim + pointerRim;
+
+        // 最终单层边缘高光遮罩（完全不参与折射）
+        float rimHighlight = clamp(radialRimProfile * directionalWeight * u_specular * 1.25, 0.0, 1.0);
+        glassCol = mix(glassCol, vec3(1.0, 0.996, 0.988), rimHighlight);
+
+        // 外边界 1.2px 硬件抗锯齿平滑融合
+        float edgeAlpha = smoothstep(0.75, -0.75, d);
+        return mix(bgCol, glassCol, edgeAlpha);
+      }
+
+      // 绘制当前选中控件的底层轨道 (Slider 蓝/灰圆头轨道 或 Toggle 翠绿/灰胶囊底轨)
+      vec3 compositeControlTrack(vec3 baseCol, vec2 samplePos, float blurSoftness, float spectralShift) {
+        float aa = 0.75 + blurSoftness * 5.5;
+        vec2 tc = u_activeTrackRect.xy;
+        vec2 ts = u_activeTrackRect.zw;
+
+        if (u_activeType > 0.5 && u_activeType < 1.5) {
+          // 1. Slider 滑块轨道：右侧浅灰底轨 + 左侧在胶囊中心圆头截止的 #007AFF 蓝色进度条 (还原图1下方滑块)
+          float dTrack = sdRoundBox(samplePos - tc, ts, ts.y);
+          float trackAlpha = smoothstep(aa, -aa, dTrack);
+          vec3 col = mix(baseCol, vec3(0.80, 0.83, 0.89), trackAlpha * 0.42);
+
+          float leftX = tc.x - ts.x;
+          float rightX = max(leftX + ts.y * 2.0, u_activeThumbRect.x + 2.0);
+          float blueCenterX = 0.5 * (leftX + rightX);
+          float blueHalfW = max(0.5 * (rightX - leftX), ts.y);
+          float dBlue = sdRoundBox(samplePos - vec2(blueCenterX, tc.y), vec2(blueHalfW, ts.y), ts.y);
+          float blueAlpha = smoothstep(aa, -aa, dBlue);
+
+          // 光谱微色散下的轨道色相响应（使折射边缘自然产生 Cyan 青色色散过渡）
+          vec3 blueTrackCol = vec3(0.0, 0.48, 1.0);
+          if (spectralShift > 0.0) {
+            blueTrackCol = mix(blueTrackCol, vec3(0.0, 0.95, 1.0), spectralShift * 0.65);
+          }
+          return mix(col, blueTrackCol, blueAlpha);
+        } else if (u_activeType > 1.5) {
+          // 2. Toggle 开关轨道：在选中态下收缩为穿过透明玻璃胶囊内部的圆头翠绿/灰胶囊芯 (还原图1上方开关)
+          float trackLeft = tc.x - ts.x - mix(0.0, 4.0, u_activeMorph);
+          float normalRight = tc.x + ts.x;
+          float activeCoreRight = mix(u_activeThumbRect.x - 2.0, u_activeThumbRect.x + 6.0, u_activeValue);
+          float trackRight = mix(normalRight, activeCoreRight, u_activeMorph);
+
+          float pillCenterX = 0.5 * (trackLeft + trackRight);
+          float pillHalfW = max(0.5 * (trackRight - trackLeft), ts.y);
+          float pillHalfH = mix(ts.y, 9.5, u_activeMorph);
+
+          float dPill = sdRoundBox(samplePos - vec2(pillCenterX, tc.y), vec2(pillHalfW, pillHalfH), pillHalfH);
+          float pillAlpha = smoothstep(aa, -aa, dPill);
+
+          vec3 offCol = vec3(0.56, 0.59, 0.65);
+          vec3 onCol = vec3(0.204, 0.780, 0.349); // #34C759
+          if (spectralShift > 0.0) {
+            onCol = mix(onCol, vec3(0.0, 0.96, 0.92), spectralShift * 0.72);
+          }
+          vec3 pillCol = mix(offCol, onCol, u_activeValue);
+          return mix(baseCol, pillCol, pillAlpha);
+        }
+        return baseCol;
+      }
+
+      /*
+       * 选中态 (手指按住/拖拽时) 的液态玻璃胶囊渲染器 — 还原图1 (iOS 26 Glass Animation)
+       * 同时作用于上方的 True Tone 开关胶囊与所有的 Slider 滑块胶囊，
+       * 并 100% 实时跟随 8 项光学参数 (模糊度 / 背景不透明度 / 折射强度 / 折射厚度 / 高光强度 / 高光宽度 / 高光硬度 / 色散)
+       */
+      vec3 renderActiveControlCapsule(vec3 sceneCol, vec2 cssPos) {
+        if (u_activeType < 0.5) {
+          return sceneCol;
+        }
+
+        // 先在场景上绘制控件底层轨道
+        vec3 colWithTrack = compositeControlTrack(sceneCol, cssPos, 0.0, 0.0);
+
+        vec2 center = u_activeThumbRect.xy;
+        vec2 halfSize = u_activeThumbRect.zw;
+        float r = min(halfSize.x, halfSize.y) - 0.5;
+        vec2 localPos = cssPos - center;
+        float d = sdRoundBox(localPos, halfSize, r);
+
+        // 胶囊外部环境柔光与投影 (还原图1 胶囊周围的淡淡翠绿/蓝色环境晕光)
+        if (d > 24.0) {
+          return colWithTrack;
+        }
+
+        if (d > 0.75) {
+          vec2 shadowPos = localPos - vec2(0.0, 4.0);
+          float sdShadow = sdRoundBox(shadowPos, halfSize, r);
+          float shadowMask = exp(-max(sdShadow, 0.0) * 0.18) * 0.24;
+          vec3 shadowed = colWithTrack * (1.0 - shadowMask);
+
+          // 选中态胶囊外侧的微弱色散环境光晕
+          vec3 glowTint = (u_activeType > 1.5)
+            ? mix(vec3(0.6, 0.65, 0.7), vec3(0.20, 0.85, 0.40), u_activeValue)
+            : vec3(0.05, 0.52, 1.0);
+          float glowMask = exp(-max(d, 0.0) * 0.14) * 0.16 * u_activeMorph * u_refraction;
+          return mix(shadowed, glowTint, glowMask);
+        }
+
+        // 计算胶囊 SDF 外法线梯度与内部边界深度 x >= 0
+        float eps = 0.65;
+        float dx = sdRoundBox(localPos + vec2(eps, 0.0), halfSize, r) - sdRoundBox(localPos - vec2(eps, 0.0), halfSize, r);
+        float dy = sdRoundBox(localPos + vec2(0.0, eps), halfSize, r) - sdRoundBox(localPos - vec2(0.0, eps), halfSize, r);
+        vec2 edgeGrad = normalize(vec2(dx, dy) + vec2(1e-6));
+        float x = max(-d, 0.0);
+
+        // 1. 折射厚度 (u_thickness) 映射到胶囊弯月面边缘宽度
+        float maxSafeT = min(halfSize.x, halfSize.y) * 0.92;
+        float T = clamp(u_thickness * 0.32, 2.2, maxSafeT);
+        float u = clamp(1.0 - x / T, 0.0, 1.0);
+
+        // 2. 3D 弯月面曲率与折射强度 (u_refraction)
+        float smoothU = u * u * (3.0 - 2.0 * u);
+        float domeSlope = (smoothU * 0.7 + pow(u, 2.2) * 1.15) / sqrt(max(1.0 - 0.84 * u * u, 0.045));
+        vec2 normalXY = edgeGrad * domeSlope + (localPos / max(halfSize, vec2(1.0))) * 0.08;
+        vec3 N = normalize(vec3(normalXY, 1.0));
+
+        float ior = mix(1.0, 1.56, u_refraction);
+        vec3 refracted = refract(vec3(0.0, 0.0, -1.0), N, 1.0 / ior);
+        float effectiveDepth = mix(10.0, 92.0, pow(u_refraction, 0.85)) * (0.4 + 0.6 * (T / 15.0));
+        vec2 refractPixOffset = vec2(refracted.x, -refracted.y) * effectiveDepth;
+        vec2 baseUVOffset = refractPixOffset * u_dpr / u_resolution;
+
+        // 3. 模糊度 (u_blur) 控制胶囊内部背景与轨道的柔焦散射
+        float localBlur = clamp(u_blur + pow(u, 2.6) * u_refraction * 0.14 * step(0.01, u_blur), 0.0, 1.0);
+
+        // 胶囊左侧入口处的柱面弯月面透镜效应（将进入胶囊的翠绿/蓝色轨道沿左侧弧形边缘折射拉伸，还原图1弯月面）
+        float leftSideWeight = smoothstep(halfSize.x * 0.35, -halfSize.x * 0.25, localPos.x);
+        float meniscusLensPull = pow(u, 1.25) * clamp(u_refraction * 1.35, 0.0, 1.0) * leftSideWeight;
+
+        // 4. 9 波段连续光谱色散积分 (u_dispersion)：在弯月面内缘自然分离出 Cyan 青色色散弧
+        float dispStrength = u_dispersion * (0.35 + 1.55 * pow(u, 1.15) + 0.4 * u_refraction);
+        vec2 tangentOffset = vec2(-baseUVOffset.y, baseUVOffset.x) * 0.22;
+
+        // 判断当前胶囊位于上方玻璃块还是下方玻璃卡片上，以保持底层玻璃色调一致
+        float onCard = step(sdRoundBox(cssPos - u_cardRect.xy, u_cardRect.zw, u_cardRadius), 0.0);
+        vec3 baseLayerTint = mix(vec3(0.97, 0.98, 1.0), vec3(0.16, 0.15, 0.18), onCard * 0.32);
+
+        vec3 refractedCol = vec3(0.0);
+        if (u_dispersion < 0.005) {
+          vec3 bgSample = sampleBlurPyramid(v_uv + baseUVOffset, localBlur);
+          bgSample = mix(bgSample, baseLayerTint, clamp(u_opacity * 0.65, 0.0, 0.85));
+
+          vec2 trackSamplePos = cssPos + refractPixOffset * 0.36;
+          trackSamplePos.y = mix(trackSamplePos.y, u_activeTrackRect.y, clamp(meniscusLensPull, 0.0, 0.95));
+          trackSamplePos.x -= abs(edgeGrad.y) * meniscusLensPull * 9.0;
+
+          refractedCol = compositeControlTrack(bgSample, trackSamplePos, localBlur * 0.6, 0.0);
+        } else {
+          vec3 accum = vec3(0.0);
+          vec3 weightSum = vec3(0.0);
+          for (int i = 0; i < 9; i++) {
+            float fi = float(i) / 8.0;
+            float s = (fi - 0.5) * 2.0;
+
+            vec3 w = vec3(
+              exp(-4.2 * (fi - 0.15) * (fi - 0.15)),
+              exp(-4.8 * (fi - 0.50) * (fi - 0.50)),
+              exp(-4.2 * (fi - 0.85) * (fi - 0.85))
+            );
+
+            vec2 waveUV = v_uv + baseUVOffset * (1.0 + s * dispStrength * 0.52)
+                        + tangentOffset * (s * dispStrength * 0.32);
+            vec3 bgSample = sampleBlurPyramid(waveUV, localBlur);
+            bgSample = mix(bgSample, baseLayerTint, clamp(u_opacity * 0.65, 0.0, 0.85));
+
+            // 不同波长在胶囊弯月面处的折射率差异（短波蓝青光在弯月面内缘折射更宽，形成图1的青色内弧）
+            float wavePull = clamp(meniscusLensPull * (1.0 + s * dispStrength * 0.48), 0.0, 0.97);
+            vec2 trackSamplePos = cssPos + refractPixOffset * (0.36 + s * dispStrength * 0.24);
+            trackSamplePos.y = mix(trackSamplePos.y, u_activeTrackRect.y, wavePull);
+            trackSamplePos.x -= abs(edgeGrad.y) * wavePull * (9.0 + s * dispStrength * 4.5);
+
+            float cyanBoost = clamp((s + 0.25) * dispStrength * u * leftSideWeight, 0.0, 1.0);
+            vec3 sampleCol = compositeControlTrack(bgSample, trackSamplePos, localBlur * 0.6, cyanBoost);
+
+            accum += sampleCol * w;
+            weightSum += w;
+          }
+          refractedCol = accum / max(weightSum, vec3(1e-5));
+        }
+
+        // 5. 背景不透明度 (u_opacity) 控制胶囊玻璃通透度 vs 柔白磨砂感
+        float capsuleOpacity = clamp(0.18 + u_opacity * 0.82, 0.08, 0.92);
+        vec3 glassCol = mix(refractedCol, vec3(0.985, 0.992, 1.0), capsuleOpacity);
+
+        // 6. 单层非折射表面高光 (由 高光强度 u_specular / 高光宽度 u_specWidth / 高光硬度 u_specHardness 控制)
+        float widthPx = max(u_specWidth * 0.72, 0.4);
+        float normDist = clamp(x / widthPx, 0.0, 1.0);
+        float innerStart = mix(0.0, 0.82, u_specHardness);
+        float falloffCurve = 1.0 - smoothstep(innerStart, 1.0, normDist);
+        float profileExponent = mix(2.4, 0.55, u_specHardness);
+        float radialRimProfile = pow(max(falloffCurve, 0.0), profileExponent);
+
+        float topLeftRim = pow(max(dot(edgeGrad, normalize(vec2(-0.65, -0.75))), 0.0), 1.25);
+        float bottomRightRim = pow(max(dot(edgeGrad, normalize(vec2(0.65, 0.75))), 0.0), 1.5) * 0.72;
+        float directionalWeight = 0.30 + topLeftRim * 0.85 + bottomRightRim;
+
+        float rimHighlight = clamp(radialRimProfile * directionalWeight * u_specular * 1.3, 0.0, 1.0);
+        glassCol = mix(glassCol, vec3(1.0), rimHighlight);
+
+        // 当从常态 (u_activeMorph = 0) 过渡到选中态 (u_activeMorph = 1) 时，从纯白实体胶囊平滑融化为透明液态玻璃胶囊
+        vec3 finalThumbCol = mix(vec3(1.0), glassCol, smoothstep(0.0, 1.0, u_activeMorph));
+
+        float edgeAlpha = smoothstep(0.75, -0.75, d);
+        return mix(colWithTrack, finalThumbCol, edgeAlpha);
+      }
+
+      void main() {
+        // 将 WebGL 像素坐标转换为与 DOM getBoundingClientRect 一致的 CSS 像素坐标 (左上角为 0,0)
+        vec2 cssPos = vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y) / u_dpr;
+
+        // 基础清晰背景
+        vec3 color = applyDisplayTone(texture2D(u_level0, v_uv).rgb);
+
+        // 渲染下方液态玻璃控制卡片
+        color = renderLiquidGlassLayer(
+          color,
+          cssPos,
+          u_cardRect.xy,
+          u_cardRect.zw,
+          u_cardRadius,
+          vec2(1.0, 1.0),
+          1.0
+        );
+
+        // 渲染上方可交互液态玻璃块
+        color = renderLiquidGlassLayer(
+          color,
+          cssPos,
+          u_blockRect.xy,
+          u_blockRect.zw,
+          u_blockRadius,
+          u_blockScale,
+          0.0
+        );
+
+        // 渲染当前手指按住处于选中态 (Active State) 的液态玻璃胶囊控件 (Toggle 开关胶囊 或 Slider 滑块胶囊)
+        color = renderActiveControlCapsule(color, cssPos);
+
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `;
+
+    // ==================== WebGL 辅助构建工具 ====================
+
+    function compileShader(type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    }
+
+    function createProgram(vsSource, fsSource) {
+      const vs = compileShader(gl.VERTEX_SHADER, vsSource);
+      const fs = compileShader(gl.FRAGMENT_SHADER, fsSource);
+      const prog = gl.createProgram();
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        console.error('Program link error:', gl.getProgramInfoLog(prog));
+        return null;
+      }
+      return prog;
+    }
+
+    const coverProgram = createProgram(VERTEX_SHADER_SRC, COVER_FRAGMENT_SRC);
+    const blurProgram = createProgram(VERTEX_SHADER_SRC, BLUR_FRAGMENT_SRC);
+    const mainProgram = createProgram(VERTEX_SHADER_SRC, MAIN_FRAGMENT_SRC);
+
+    // 全屏四边形顶点缓冲
+    const quadBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
+      gl.STATIC_DRAW
+    );
+
+    function bindQuadAttrib(program) {
+      const loc = gl.getAttribLocation(program, 'a_position');
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    }
+
+    // 创建纹理与 FBO
+    function createEmptyTexture(w, h) {
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      return tex;
+    }
+
+    function createFBO(w, h) {
+      const tex = createEmptyTexture(w, h);
+      const fbo = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      return { fbo, tex, width: w, height: h };
+    }
+
+    // 5 级模糊金字塔 FBO 容器
+    let pyramidFBOs = {
+      level0: null,
+      level1: null, temp1: null,
+      level2: null, temp2: null,
+      level3: null, temp3: null,
+      level4: null, temp4: null
+    };
+
+    let rawWallpaperTex = null;
+    let rawImageWidth = 1920;
+    let rawImageHeight = 1080;
+    let pyramidDirty = true;
+
+    function rebuildPyramidFBOs(width, height) {
+      // 清理旧资源
+      Object.values(pyramidFBOs).forEach((item) => {
+        if (item) {
+          gl.deleteFramebuffer(item.fbo);
+          gl.deleteTexture(item.tex);
+        }
+      });
+
+      const w1 = Math.max(1, Math.floor(width * 0.75));
+      const h1 = Math.max(1, Math.floor(height * 0.75));
+      const w2 = Math.max(1, Math.floor(width * 0.45));
+      const h2 = Math.max(1, Math.floor(height * 0.45));
+      const w3 = Math.max(1, Math.floor(width * 0.25));
+      const h3 = Math.max(1, Math.floor(height * 0.25));
+      const w4 = Math.max(1, Math.floor(width * 0.125));
+      const h4 = Math.max(1, Math.floor(height * 0.125));
+
+      pyramidFBOs.level0 = createFBO(width, height);
+      pyramidFBOs.temp1 = createFBO(w1, h1);
+      pyramidFBOs.level1 = createFBO(w1, h1);
+      pyramidFBOs.temp2 = createFBO(w2, h2);
+      pyramidFBOs.level2 = createFBO(w2, h2);
+      pyramidFBOs.temp3 = createFBO(w3, h3);
+      pyramidFBOs.level3 = createFBO(w3, h3);
+      pyramidFBOs.temp4 = createFBO(w4, h4);
+      pyramidFBOs.level4 = createFBO(w4, h4);
+
+      pyramidDirty = true;
+    }
+
+    // 执行单步高斯模糊 Pass
+    function runBlurPass(inputTex, targetFBO, dirX, dirY) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, targetFBO.fbo);
+      gl.viewport(0, 0, targetFBO.width, targetFBO.height);
+      gl.useProgram(blurProgram);
+      bindQuadAttrib(blurProgram);
+
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, inputTex);
+      gl.uniform1i(gl.getUniformLocation(blurProgram, 'u_tex'), 0);
+      gl.uniform2f(gl.getUniformLocation(blurProgram, 'u_dir'), dirX, dirY);
+
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    }
+
+    // 当背景图片更新或窗口尺寸变化时，预计算 5 级可分离高斯模糊金字塔
+    function updateBlurPyramid() {
+      if (!rawWallpaperTex || !pyramidFBOs.level0) return;
+
+      // Pass 0: 将原始图片按 cover 比例渲染至 level0
+      gl.bindFramebuffer(gl.FRAMEBUFFER, pyramidFBOs.level0.fbo);
+      gl.viewport(0, 0, pyramidFBOs.level0.width, pyramidFBOs.level0.height);
+      gl.useProgram(coverProgram);
+      bindQuadAttrib(coverProgram);
+
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, rawWallpaperTex);
+      gl.uniform1i(gl.getUniformLocation(coverProgram, 'u_image'), 0);
+      gl.uniform2f(
+        gl.getUniformLocation(coverProgram, 'u_resolution'),
+        pyramidFBOs.level0.width,
+        pyramidFBOs.level0.height
+      );
+      gl.uniform2f(
+        gl.getUniformLocation(coverProgram, 'u_imageResolution'),
+        rawImageWidth,
+        rawImageHeight
+      );
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      // Level 1: 轻度丝滑模糊
+      runBlurPass(pyramidFBOs.level0.tex, pyramidFBOs.temp1, 1.15 / pyramidFBOs.temp1.width, 0.0);
+      runBlurPass(pyramidFBOs.temp1.tex, pyramidFBOs.level1, 0.0, 1.15 / pyramidFBOs.level1.height);
+
+      // Level 2: 中度毛玻璃模糊
+      runBlurPass(pyramidFBOs.level1.tex, pyramidFBOs.temp2, 1.45 / pyramidFBOs.temp2.width, 0.0);
+      runBlurPass(pyramidFBOs.temp2.tex, pyramidFBOs.level2, 0.0, 1.45 / pyramidFBOs.level2.height);
+
+      // Level 3: 深度液态散射模糊
+      runBlurPass(pyramidFBOs.level2.tex, pyramidFBOs.temp3, 1.75 / pyramidFBOs.temp3.width, 0.0);
+      runBlurPass(pyramidFBOs.temp3.tex, pyramidFBOs.level3, 0.0, 1.75 / pyramidFBOs.level3.height);
+
+      // Level 4: 超深度柔焦模糊
+      runBlurPass(pyramidFBOs.level3.tex, pyramidFBOs.temp4, 2.1 / pyramidFBOs.temp4.width, 0.0);
+      runBlurPass(pyramidFBOs.temp4.tex, pyramidFBOs.level4, 0.0, 2.1 / pyramidFBOs.level4.height);
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      pyramidDirty = false;
+    }
+
+    // ==================== 壁纸纹理加载与流光金后备纹理 ====================
+
+    function uploadSourceToWebGL(source, width, height) {
+      if (!rawWallpaperTex) {
+        rawWallpaperTex = gl.createTexture();
+      }
+      rawImageWidth = width;
+      rawImageHeight = height;
+
+      gl.bindTexture(gl.TEXTURE_2D, rawWallpaperTex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+
+      pyramidDirty = true;
+    }
+
+    // 创建 iOS 27 流光金风格程序化后备壁纸（在远程图片加载完成前或离线时无缝显示）
+    function createInitialFallbackWallpaper() {
+      const offCanvas = document.createElement('canvas');
+      offCanvas.width = 1024;
+      offCanvas.height = 1024;
+      const ctx = offCanvas.getContext('2d');
+
+      const baseGrad = ctx.createLinearGradient(0, 0, 1024, 1024);
+      baseGrad.addColorStop(0.0, '#1a1105');
+      baseGrad.addColorStop(0.32, '#6b4718');
+      baseGrad.addColorStop(0.58, '#d49b43');
+      baseGrad.addColorStop(0.82, '#3c240a');
+      baseGrad.addColorStop(1.0, '#0e0904');
+      ctx.fillStyle = baseGrad;
+      ctx.fillRect(0, 0, 1024, 1024);
+
+      const blobs = [
+        { x: 280, y: 260, r: 460, c0: 'rgba(255, 226, 154, 0.85)', c1: 'rgba(255, 226, 154, 0)' },
+        { x: 760, y: 420, r: 520, c0: 'rgba(232, 158, 56, 0.75)', c1: 'rgba(232, 158, 56, 0)' },
+        { x: 380, y: 780, r: 490, c0: 'rgba(255, 205, 112, 0.65)', c1: 'rgba(255, 205, 112, 0)' }
+      ];
+      blobs.forEach((b) => {
+        const g = ctx.createRadialGradient(b.x, b.y, 10, b.x, b.y, b.r);
+        g.addColorStop(0, b.c0);
+        g.addColorStop(1, b.c1);
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, 1024, 1024);
+      });
+
+      uploadSourceToWebGL(offCanvas, offCanvas.width, offCanvas.height);
+    }
+
+    function loadWallpaperFromURL(url, isUserUpload = false) {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        uploadSourceToWebGL(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
+        if (isUserUpload) {
+          showToast('已切换为自定义背景图片');
+        }
+      };
+      img.onerror = () => {
+        if (isUserUpload) {
+          showToast('图片读取失败，请重试');
+        }
+      };
+      img.src = url;
+    }
+
+    // ==================== 窗口尺寸自适应与滑块配置 ====================
+
+    let currentDpr = Math.min(window.devicePixelRatio || 1, 2);
+
+    function handleResize() {
+      currentDpr = Math.min(window.devicePixelRatio || 1, 2);
+      const w = Math.max(1, Math.floor(window.innerWidth * currentDpr));
+      const h = Math.max(1, Math.floor(window.innerHeight * currentDpr));
+
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+        rebuildPyramidFBOs(w, h);
+      }
+    }
+
+    window.addEventListener('resize', handleResize);
+
+    // 8 项液态玻璃光学滑块配置
+    const sliderConfigs = [
+      { id: 'slider-blur', valId: 'val-blur', key: 'blur', format: (v) => `${Math.round(v)} px` },
+      { id: 'slider-opacity', valId: 'val-opacity', key: 'opacity', format: (v) => `${Math.round(v)}%` },
+      { id: 'slider-refraction', valId: 'val-refraction', key: 'refraction', format: (v) => `${Math.round(v)}%` },
+      { id: 'slider-thickness', valId: 'val-thickness', key: 'thickness', format: (v) => `${Math.round(v)} px` },
+      { id: 'slider-specular', valId: 'val-specular', key: 'specular', format: (v) => `${Math.round(v)}%` },
+      { id: 'slider-specWidth', valId: 'val-specWidth', key: 'specWidth', scale: 0.1, format: (v) => `${v.toFixed(1)} px` },
+      { id: 'slider-specHardness', valId: 'val-specHardness', key: 'specHardness', format: (v) => `${Math.round(v)}%` },
+      { id: 'slider-dispersion', valId: 'val-dispersion', key: 'dispersion', format: (v) => `${Math.round(v)}%` }
+    ];
+
+    // 同步 iOS 26 滑块的轨道进度与手柄位置
+    function syncLiquidSliderVisual(inputEl) {
+      const wrapEl = inputEl.closest('.lg-slider-wrap');
+      if (!wrapEl) return;
+      const min = parseFloat(inputEl.min) || 0;
+      const max = parseFloat(inputEl.max) || 100;
+      const val = parseFloat(inputEl.value) || 0;
+      const ratio = Math.max(0, Math.min(1, (val - min) / (max - min)));
+      // 让胶囊手柄中心保持在轨道圆角安全范围内
+      const safePct = 4 + ratio * 92;
+      wrapEl.style.setProperty('--progress', `${safePct.toFixed(2)}%`);
+      wrapEl.style.setProperty('--progress-num', ratio.toFixed(3));
+    }
+
+    /*
+     * 选中态 (Active / Pressed State) 实时 WebGL 液态玻璃胶囊状态机：
+     * 常态下所有 Toggle 和 Slider 均为纯净实体白胶囊；
+     * 仅当用户手指/鼠标按住控件时，切换为 WebGL 实时折射与色散的液态玻璃大胶囊，并跟随 8 项参数变化
+     */
+    const activeControlState = {
+      type: 0,           // 0: 无, 1: Slider, 2: Toggle
+      wrapEl: null,
+      trackEl: null,
+      inputEl: null,
+      isLarge: false,
+      isPressed: false,
+      morph: 0,          // 0.0 (常态) -> 1.0 (选中态液态玻璃胶囊)
+      toggleSlide: 1.0,  // Toggle 当前滑动位置 (0.0 关 -> 1.0 开)
+      targetToggleSlide: 1.0,
+      dragMoved: false,
+      startX: 0,
+      startSlide: 1.0,
+      releaseTimer: null
+    };
+
+    function activateControlGlass(type, wrapEl, trackEl, inputEl = null, isLarge = false) {
+      clearTimeout(activeControlState.releaseTimer);
+      if (activeControlState.wrapEl && activeControlState.wrapEl !== wrapEl) {
+        activeControlState.wrapEl.classList.remove('is-webgl-active');
+      }
+      activeControlState.type = type;
+      activeControlState.wrapEl = wrapEl;
+      activeControlState.trackEl = trackEl;
+      activeControlState.inputEl = inputEl;
+      activeControlState.isLarge = isLarge;
+      activeControlState.isPressed = true;
+      wrapEl.classList.add('is-webgl-active');
+    }
+
+    function releaseControlGlass() {
+      if (!activeControlState.isPressed) return;
+      activeControlState.isPressed = false;
+    }
+
+    function bindInteractiveSliderEffects(inputEl) {
+      const wrapEl = inputEl.closest('.lg-slider-wrap');
+      if (!wrapEl) return;
+      const trackEl = wrapEl.querySelector('.lg-slider-track');
+      const isLarge = wrapEl.classList.contains('lg-slider-large');
+
+      inputEl.addEventListener('pointerdown', () => {
+        activateControlGlass(1, wrapEl, trackEl, inputEl, isLarge);
+      });
+    }
+
+    window.addEventListener('pointerup', () => {
+      if (activeControlState.type === 1 && activeControlState.isPressed) {
+        releaseControlGlass();
+      }
+    });
+    window.addEventListener('pointercancel', () => {
+      if (activeControlState.type === 1 && activeControlState.isPressed) {
+        releaseControlGlass();
+      }
+    });
+
+    sliderConfigs.forEach((cfg) => {
+      const inputEl = document.getElementById(cfg.id);
+      const valEl = document.getElementById(cfg.valId);
+
+      const updateVal = () => {
+        const raw = parseFloat(inputEl.value);
+        const scaled = raw * (cfg.scale || 1);
+        state[cfg.key] = scaled;
+        valEl.textContent = cfg.format(scaled);
+        syncLiquidSliderVisual(inputEl);
+      };
+
+      inputEl.addEventListener('input', updateVal);
+      bindInteractiveSliderEffects(inputEl);
+
+      // 双击单个滑块可快速重置该项默认值
+      inputEl.addEventListener('dblclick', () => {
+        inputEl.value = inputEl.dataset.default;
+        updateVal();
+      });
+
+      updateVal();
+    });
+
+    // 绑定上方液态玻璃块内部的 iOS 26 亮度滑块与 True Tone 开关
+    const demoBrightnessSlider = document.getElementById('demo-brightness-slider');
+    const demoTrueToneToggle = document.getElementById('demo-truetone-toggle');
+
+    if (demoBrightnessSlider) {
+      const updateBrightness = () => {
+        state.brightness = parseFloat(demoBrightnessSlider.value);
+        syncLiquidSliderVisual(demoBrightnessSlider);
+      };
+      demoBrightnessSlider.addEventListener('input', updateBrightness);
+      demoBrightnessSlider.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        demoBrightnessSlider.value = demoBrightnessSlider.dataset.default;
+        updateBrightness();
+      });
+      bindInteractiveSliderEffects(demoBrightnessSlider);
+      updateBrightness();
+    }
+
+    if (demoTrueToneToggle) {
+      const toggleTrackEl = demoTrueToneToggle.querySelector('.lg-toggle-track');
+
+      demoTrueToneToggle.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        const isChecked = demoTrueToneToggle.getAttribute('aria-checked') === 'true';
+        const curSlide = isChecked ? 1.0 : 0.0;
+        activeControlState.toggleSlide = curSlide;
+        activeControlState.targetToggleSlide = curSlide;
+        activeControlState.dragMoved = false;
+        activeControlState.startX = e.clientX;
+        activeControlState.startSlide = curSlide;
+
+        activateControlGlass(2, demoTrueToneToggle, toggleTrackEl, null, true);
+        demoTrueToneToggle.setPointerCapture(e.pointerId);
+      });
+
+      demoTrueToneToggle.addEventListener('pointermove', (e) => {
+        if (activeControlState.type !== 2 || !activeControlState.isPressed) return;
+        const dx = e.clientX - activeControlState.startX;
+        if (Math.abs(dx) > 3) {
+          activeControlState.dragMoved = true;
+        }
+        const nextSlide = Math.max(0.0, Math.min(1.0, activeControlState.startSlide + dx / 24.0));
+        activeControlState.targetToggleSlide = nextSlide;
+        state.trueTone = nextSlide;
+      });
+
+      const finishToggleInteraction = () => {
+        if (activeControlState.type !== 2 || !activeControlState.isPressed) return;
+        let nextState;
+        if (activeControlState.dragMoved) {
+          nextState = activeControlState.targetToggleSlide >= 0.5;
+        } else {
+          const wasChecked = demoTrueToneToggle.getAttribute('aria-checked') === 'true';
+          nextState = !wasChecked;
+        }
+        demoTrueToneToggle.setAttribute('aria-checked', String(nextState));
+        activeControlState.targetToggleSlide = nextState ? 1.0 : 0.0;
+        state.trueTone = nextState ? 1.0 : 0.0;
+
+        // 轻点时保持短暂选中态展示液态玻璃膨胀动画，随后平滑收起回常态白胶囊
+        clearTimeout(activeControlState.releaseTimer);
+        activeControlState.releaseTimer = setTimeout(() => {
+          releaseControlGlass();
+        }, activeControlState.dragMoved ? 40 : 160);
+      };
+
+      demoTrueToneToggle.addEventListener('pointerup', finishToggleInteraction);
+      demoTrueToneToggle.addEventListener('pointercancel', finishToggleInteraction);
+    }
+
+    // 胶囊按钮上传自定义背景图片
+    uploadBtn.addEventListener('click', () => {
+      uploadInput.click();
+    });
+
+    uploadInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const objectUrl = URL.createObjectURL(file);
+      loadWallpaperFromURL(objectUrl, true);
+      uploadInput.value = '';
+    });
+
+    // ==================== 液态玻璃块拖拽与弹性物理形变 ====================
+
+    liquidBlockEl.addEventListener('pointerdown', (e) => {
+      // 如果点击的是玻璃块内部的 Slider 或 Toggle 控件，则优先操作控件而不触发整体拖拽
+      if (e.target.closest('[data-no-drag="true"]')) {
+        return;
+      }
+      blockMotion.isDragging = true;
+      blockMotion.startPointerX = e.clientX;
+      blockMotion.startPointerY = e.clientY;
+      blockMotion.startOffsetX = blockMotion.targetX;
+      blockMotion.startOffsetY = blockMotion.targetY;
+      liquidBlockEl.classList.add('dragging');
+      liquidBlockEl.setPointerCapture(e.pointerId);
+    });
+
+    window.addEventListener('pointermove', (e) => {
+      pointer.targetX = e.clientX;
+      pointer.targetY = e.clientY;
+
+      if (!blockMotion.isDragging) return;
+      const dx = e.clientX - blockMotion.startPointerX;
+      const dy = e.clientY - blockMotion.startPointerY;
+      blockMotion.targetX = blockMotion.startOffsetX + dx;
+      blockMotion.targetY = blockMotion.startOffsetY + dy;
+    });
+
+    function endBlockDrag() {
+      if (!blockMotion.isDragging) return;
+      blockMotion.isDragging = false;
+      liquidBlockEl.classList.remove('dragging');
+    }
+
+    window.addEventListener('pointerup', endBlockDrag);
+    window.addEventListener('pointercancel', endBlockDrag);
+
+    // 双击液态玻璃块平滑归位
+    liquidBlockEl.addEventListener('dblclick', (e) => {
+      if (e.target.closest('[data-no-drag="true"]')) return;
+      blockMotion.targetX = 0;
+      blockMotion.targetY = 0;
+      showToast('液态玻璃块已归位');
+    });
+
+    // ==================== 主渲染循环 ====================
+
+    const mainUniforms = {
+      u_level0: gl.getUniformLocation(mainProgram, 'u_level0'),
+      u_level1: gl.getUniformLocation(mainProgram, 'u_level1'),
+      u_level2: gl.getUniformLocation(mainProgram, 'u_level2'),
+      u_level3: gl.getUniformLocation(mainProgram, 'u_level3'),
+      u_level4: gl.getUniformLocation(mainProgram, 'u_level4'),
+      u_resolution: gl.getUniformLocation(mainProgram, 'u_resolution'),
+      u_dpr: gl.getUniformLocation(mainProgram, 'u_dpr'),
+      u_pointer: gl.getUniformLocation(mainProgram, 'u_pointer'),
+      u_blockRect: gl.getUniformLocation(mainProgram, 'u_blockRect'),
+      u_blockRadius: gl.getUniformLocation(mainProgram, 'u_blockRadius'),
+      u_blockScale: gl.getUniformLocation(mainProgram, 'u_blockScale'),
+      u_cardRect: gl.getUniformLocation(mainProgram, 'u_cardRect'),
+      u_cardRadius: gl.getUniformLocation(mainProgram, 'u_cardRadius'),
+      u_blur: gl.getUniformLocation(mainProgram, 'u_blur'),
+      u_opacity: gl.getUniformLocation(mainProgram, 'u_opacity'),
+      u_refraction: gl.getUniformLocation(mainProgram, 'u_refraction'),
+      u_thickness: gl.getUniformLocation(mainProgram, 'u_thickness'),
+      u_specular: gl.getUniformLocation(mainProgram, 'u_specular'),
+      u_specWidth: gl.getUniformLocation(mainProgram, 'u_specWidth'),
+      u_specHardness: gl.getUniformLocation(mainProgram, 'u_specHardness'),
+      u_dispersion: gl.getUniformLocation(mainProgram, 'u_dispersion'),
+      u_exposure: gl.getUniformLocation(mainProgram, 'u_exposure'),
+      u_trueTone: gl.getUniformLocation(mainProgram, 'u_trueTone'),
+      u_activeType: gl.getUniformLocation(mainProgram, 'u_activeType'),
+      u_activeMorph: gl.getUniformLocation(mainProgram, 'u_activeMorph'),
+      u_activeTrackRect: gl.getUniformLocation(mainProgram, 'u_activeTrackRect'),
+      u_activeThumbRect: gl.getUniformLocation(mainProgram, 'u_activeThumbRect'),
+      u_activeValue: gl.getUniformLocation(mainProgram, 'u_activeValue')
+    };
+
+    let smoothTrueTone = 1.0;
+
+    function renderFrame() {
+      if (pyramidDirty) {
+        updateBlurPyramid();
+      }
+
+      // 更新指针平滑跟随
+      pointer.x += (pointer.targetX - pointer.x) * 0.16;
+      pointer.y += (pointer.targetY - pointer.y) * 0.16;
+      smoothTrueTone += (state.trueTone - smoothTrueTone) * 0.14;
+
+      // 更新液态玻璃块弹簧物理位移与微张力形变
+      const prevX = blockMotion.offsetX;
+      const prevY = blockMotion.offsetY;
+      blockMotion.offsetX += (blockMotion.targetX - blockMotion.offsetX) * 0.24;
+      blockMotion.offsetY += (blockMotion.targetY - blockMotion.offsetY) * 0.24;
+
+      const vx = blockMotion.offsetX - prevX;
+      const vy = blockMotion.offsetY - prevY;
+      const targetScaleX = 1.0 + Math.max(-0.08, Math.min(0.08, (Math.abs(vx) - Math.abs(vy)) * 0.0045));
+      const targetScaleY = 1.0 + Math.max(-0.08, Math.min(0.08, (Math.abs(vy) - Math.abs(vx)) * 0.0045));
+      blockMotion.scaleX += (targetScaleX - blockMotion.scaleX) * 0.2;
+      blockMotion.scaleY += (targetScaleY - blockMotion.scaleY) * 0.2;
+
+      liquidBlockEl.style.transform = `translate3d(${blockMotion.offsetX.toFixed(2)}px, ${blockMotion.offsetY.toFixed(2)}px, 0)`;
+
+      // 读取 DOM 中液态玻璃块与下方控制卡片的实时几何矩形
+      const blockRect = liquidBlockEl.getBoundingClientRect();
+      const cardRect = liquidCardEl.getBoundingClientRect();
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.useProgram(mainProgram);
+      bindQuadAttrib(mainProgram);
+
+      // 绑定 5 级模糊金字塔纹理
+      const levels = [
+        pyramidFBOs.level0.tex,
+        pyramidFBOs.level1.tex,
+        pyramidFBOs.level2.tex,
+        pyramidFBOs.level3.tex,
+        pyramidFBOs.level4.tex
+      ];
+      for (let i = 0; i < 5; i++) {
+        gl.activeTexture(gl.TEXTURE0 + i);
+        gl.bindTexture(gl.TEXTURE_2D, levels[i]);
+      }
+      gl.uniform1i(mainUniforms.u_level0, 0);
+      gl.uniform1i(mainUniforms.u_level1, 1);
+      gl.uniform1i(mainUniforms.u_level2, 2);
+      gl.uniform1i(mainUniforms.u_level3, 3);
+      gl.uniform1i(mainUniforms.u_level4, 4);
+
+      gl.uniform2f(mainUniforms.u_resolution, canvas.width, canvas.height);
+      gl.uniform1f(mainUniforms.u_dpr, currentDpr);
+      gl.uniform2f(mainUniforms.u_pointer, pointer.x, pointer.y);
+
+      // 传递上方液态玻璃块坐标与圆角
+      gl.uniform4f(
+        mainUniforms.u_blockRect,
+        blockRect.left + blockRect.width * 0.5,
+        blockRect.top + blockRect.height * 0.5,
+        blockRect.width * 0.5,
+        blockRect.height * 0.5
+      );
+      gl.uniform1f(mainUniforms.u_blockRadius, 38.0);
+      gl.uniform2f(mainUniforms.u_blockScale, blockMotion.scaleX, blockMotion.scaleY);
+
+      // 传递下方液态玻璃卡片坐标与圆角
+      gl.uniform4f(
+        mainUniforms.u_cardRect,
+        cardRect.left + cardRect.width * 0.5,
+        cardRect.top + cardRect.height * 0.5,
+        cardRect.width * 0.5,
+        cardRect.height * 0.5
+      );
+      gl.uniform1f(mainUniforms.u_cardRadius, 34.0);
+
+      // 传递 8 个实时光学滑块参数与顶部玻璃块内的控件状态
+      gl.uniform1f(mainUniforms.u_blur, state.blur / 100.0);
+      gl.uniform1f(mainUniforms.u_opacity, state.opacity / 100.0);
+      gl.uniform1f(mainUniforms.u_refraction, state.refraction / 100.0);
+      gl.uniform1f(mainUniforms.u_thickness, state.thickness);
+      gl.uniform1f(mainUniforms.u_specular, state.specular / 100.0);
+      gl.uniform1f(mainUniforms.u_specWidth, state.specWidth);
+      gl.uniform1f(mainUniforms.u_specHardness, state.specHardness / 100.0);
+      gl.uniform1f(mainUniforms.u_dispersion, state.dispersion / 100.0);
+      gl.uniform1f(mainUniforms.u_exposure, state.brightness / 82.0);
+      gl.uniform1f(mainUniforms.u_trueTone, smoothTrueTone);
+
+      // 更新选中态 (手指按住/拖拽时) 的控件液态玻璃胶囊动画与几何坐标
+      const targetMorph = activeControlState.isPressed ? 1.0 : 0.0;
+      activeControlState.morph += (targetMorph - activeControlState.morph) * 0.26;
+      activeControlState.toggleSlide += (activeControlState.targetToggleSlide - activeControlState.toggleSlide) * 0.25;
+
+      if (!activeControlState.isPressed && activeControlState.morph < 0.015 && activeControlState.type !== 0) {
+        if (activeControlState.wrapEl) {
+          activeControlState.wrapEl.classList.remove('is-webgl-active');
+        }
+        activeControlState.type = 0;
+        activeControlState.morph = 0;
+      }
+
+      if (activeControlState.type === 1 && activeControlState.trackEl && activeControlState.inputEl) {
+        const tRect = activeControlState.trackEl.getBoundingClientRect();
+        const inputEl = activeControlState.inputEl;
+        const min = parseFloat(inputEl.min) || 0;
+        const max = parseFloat(inputEl.max) || 100;
+        const val = parseFloat(inputEl.value) || 0;
+        const ratio = Math.max(0, Math.min(1, (val - min) / (max - min)));
+        const safeRatio = 0.04 + ratio * 0.92;
+
+        const thumbCenterX = tRect.left + tRect.width * safeRatio;
+        const thumbCenterY = tRect.top + tRect.height * 0.5;
+
+        // 从常态白色小胶囊平滑膨胀为图1中的选中态液态玻璃大胶囊
+        const m = activeControlState.morph;
+        const baseHalfW = activeControlState.isLarge ? 17.0 : 14.0;
+        const baseHalfH = activeControlState.isLarge ? 11.0 : 9.0;
+        const activeHalfW = activeControlState.isLarge ? 29.0 : 25.0;
+        const activeHalfH = activeControlState.isLarge ? 18.0 : 15.5;
+
+        gl.uniform1f(mainUniforms.u_activeType, 1.0);
+        gl.uniform1f(mainUniforms.u_activeMorph, m);
+        gl.uniform4f(
+          mainUniforms.u_activeTrackRect,
+          tRect.left + tRect.width * 0.5,
+          tRect.top + tRect.height * 0.5,
+          tRect.width * 0.5,
+          tRect.height * 0.5
+        );
+        gl.uniform4f(
+          mainUniforms.u_activeThumbRect,
+          thumbCenterX,
+          thumbCenterY,
+          baseHalfW + (activeHalfW - baseHalfW) * m,
+          baseHalfH + (activeHalfH - baseHalfH) * m
+        );
+        gl.uniform1f(mainUniforms.u_activeValue, ratio);
+      } else if (activeControlState.type === 2 && activeControlState.trackEl) {
+        const tRect = activeControlState.trackEl.getBoundingClientRect();
+        const m = activeControlState.morph;
+        const slide = activeControlState.toggleSlide;
+
+        // 常态下滑块中心在轨道内左右偏移 ±10px；选中态下膨胀为大图1中的透明液态玻璃胶囊
+        const thumbOffsetX = (slide - 0.5) * 20.0;
+        const thumbCenterX = tRect.left + tRect.width * 0.5 + thumbOffsetX;
+        const thumbCenterY = tRect.top + tRect.height * 0.5;
+
+        const baseHalfW = 18.0;
+        const baseHalfH = 13.0;
+        const activeHalfW = 27.0;
+        const activeHalfH = 18.0;
+
+        gl.uniform1f(mainUniforms.u_activeType, 2.0);
+        gl.uniform1f(mainUniforms.u_activeMorph, m);
+        gl.uniform4f(
+          mainUniforms.u_activeTrackRect,
+          tRect.left + tRect.width * 0.5,
+          tRect.top + tRect.height * 0.5,
+          tRect.width * 0.5,
+          tRect.height * 0.5
+        );
+        gl.uniform4f(
+          mainUniforms.u_activeThumbRect,
+          thumbCenterX,
+          thumbCenterY,
+          baseHalfW + (activeHalfW - baseHalfW) * m,
+          baseHalfH + (activeHalfH - baseHalfH) * m
+        );
+        gl.uniform1f(mainUniforms.u_activeValue, slide);
+      } else {
+        gl.uniform1f(mainUniforms.u_activeType, 0.0);
+        gl.uniform1f(mainUniforms.u_activeMorph, 0.0);
+      }
+
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      requestAnimationFrame(renderFrame);
+    }
+
+    // 启动初始化
+    window.onload = () => {
+      handleResize();
+      createInitialFallbackWallpaper();
+      loadWallpaperFromURL(DEFAULT_WALLPAPER_URL, false);
+      requestAnimationFrame(renderFrame);
+    };
+  </script>
+</body>
+</html>
